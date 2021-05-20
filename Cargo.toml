@@ -1,0 +1,21 @@
+[package]
+name = "b3sum-ng"
+version = "0.1.0"
+authors = ["Daniel Zwell <devel@zwell.net>"]
+edition = "2018"
+license = "MIT/Apache-2.0"
+repository = "https://github.com/lefth/b3sum-ng"
+homepage = "https://github.com/lefth/b3sum-ng"
+documentation = "https://lefth.github.io/b3sum-ng"
+readme = "README.md"
+description = """
+A fast checksum utility that works well on spinning hard drives.
+An alternative to [b3sum](https://docs.rs/crate/b3sum/).
+"""
+
+[dependencies]
+structopt = "0.3.21"
+rayon = "1.5.1"
+blake3 = { version = "0.3.7", features = ["rayon"] }
+multi-semaphore = { version = "0.1.0", git = "https://github.com/lefth/multi-semaphore" }
+memmap = "0.7.0"

@@ -1,0 +1,19 @@
+sudo: false
+language: rust
+rust:
+- 1.41.0 # a dependency needs a fairly recent rust
+- nightly
+- beta
+- stable
+before_script:
+- |
+  pip install 'travis-cargo<0.2' --user &&
+  pip install python-dateutil --user &&
+  export PATH=$HOME/.local/bin:$PATH
+script:
+- |
+  cargo build &&
+  cargo test &&
+  travis-cargo --only stable doc
+after_success:
+- travis-cargo --only stable doc-upload
