@@ -108,8 +108,13 @@ pub(crate) fn b3sum_large(file: Input, use_mmap: bool) -> Result<[u8; OUT_LEN]> 
     let mut hasher = blake3::Hasher::new();
     match file {
         Input::File(file) if use_mmap => {
+            // Iterating over chunks is faster than computing the whole buffer,
+            // even on SSDs. On spinning discs, mmap is still slower than normal file reads.
+            // TODO: the buffer size may need to be tuned based on the number of threads.
             let buf = unsafe { Mmap::map(&file) }?;
-            hasher.update_with_join::<blake3::join::RayonJoin>(&buf);
+            for slice in buf.chunks(4_194_304) {
+                hasher.update_with_join::<blake3::join::RayonJoin>(&slice);
+            }
         }
         _ => {
             let mut file: Box<dyn Read> = match file {
