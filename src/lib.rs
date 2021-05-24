@@ -16,8 +16,48 @@ use structopt::*;
 
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 
-/// Compute a checksum using different logic depending on input characteristics.
-/// This function handles locking to get the right amount of I/O parallelism.
+/// Compute a checksum using different logic depending on input characteristics. This function
+/// handles locking to get the right amount of I/O parallelism.
+///
+/// `max_job_count` is the number of jobs that will be used for reading small files.  Small files
+/// are checksummed using one thread each, in parallel.  Large files will be read by just one
+/// thread but will use multiple threads for computing the checksum, irrespective of the
+/// `max_job_count` value.  It is commonly thought that using just one I/O thread gives fastest
+/// reads on spinning hard drives. I have not found that to be true when reading small files.
+///
+/// The semaphore's capacity should equal `max_job_count`.
+///
+/// The max number of threads used for checksumming large files is by default the number of logical
+/// CPU cores Rayon detects (via `num_cpus`). This can be overridden by setting the
+/// `RAYON_NUM_THREADS` environment variable. At least two threads must be used since one thread is
+/// needed to read files and another is needed to compute checksums.
+///
+/// Since this function may may spawn a background thread, `Ok(())` may be returned but an error
+/// may still be produced later. Callers should use [`print_error`] to handle errors, since that
+/// matches what will be invoked internally.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::{error::Error, path::PathBuf, sync::Arc};
+/// use multi_semaphore::Semaphore;
+/// use rayon::Scope;
+/// # fn print_error(path: &PathBuf, err: Box<dyn Error>) { }
+/// # fn do_checksum( path: PathBuf, max_job_count: usize, io_lock: Arc<Semaphore>, use_mmap: bool, s: &Scope,) -> Result<(), Box<dyn Error>> { todo!() }
+///
+/// let paths = vec![PathBuf::from("song.mp3"), PathBuf::from("todo.txt")];
+/// let max_job_count = 32;
+/// let io_lock = Arc::new(Semaphore::new(max_job_count as isize));
+/// rayon::scope(|s| {
+///     for path in paths {
+///         if let Err(err) =
+///             do_checksum(path.clone(), max_job_count, Arc::clone(&io_lock), false, s)
+///         {
+///             print_error(&path, err);
+///         }
+///     }
+/// });
+/// ```
 pub fn do_checksum(
     path: PathBuf,
     max_job_count: usize,
@@ -100,7 +140,7 @@ pub(crate) fn print_checksum(path: &PathBuf, result: Result<[u8; OUT_LEN]>) {
 }
 
 /// Print an error and the filename that caused it.
-pub(crate) fn print_error(path: &PathBuf, err: Box<dyn Error>) {
+pub fn print_error(path: &PathBuf, err: Box<dyn Error>) {
     let binary_name = match std::env::current_exe() {
         Ok(binary_name) => match binary_name.file_name() {
             Some(binary_name) => binary_name.to_string_lossy().to_string(),
