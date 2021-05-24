@@ -27,7 +27,7 @@ pub fn do_checksum(
 ) -> Result<()> {
     if let Some(str) = path.to_str() {
         if str == "-" {
-            let checksum = b3sum_small(&mut std::io::stdin());
+            let checksum = b3sum_large(Input::Stream(Box::new(std::io::stdin())), false);
             print_checksum(&path, checksum);
             return Ok(());
         }
@@ -42,7 +42,7 @@ pub fn do_checksum(
         // Wait for all other I/O to be finished, and take all the I/O resources.
         // Because concurrent reads of large files hurts performance on SSDs/HDDs.
         io_lock.acquire_many(max_job_count as isize - 1);
-        let checksum = b3sum_large(file, use_mmap);
+        let checksum = b3sum_large(Input::File(file), use_mmap);
         io_lock.release_many(max_job_count as isize);
         print_checksum(&path, checksum);
     } else {
@@ -64,19 +64,26 @@ pub(crate) fn b3sum_small(file: &mut dyn Read) -> Result<[u8; OUT_LEN]> {
 }
 
 /// Compute a multi-threaded checksum of a large file by buffering it or memory mapping it.
-pub(crate) fn b3sum_large(mut file: File, use_mmap: bool) -> Result<[u8; OUT_LEN]> {
+pub(crate) fn b3sum_large(file: Input, use_mmap: bool) -> Result<[u8; OUT_LEN]> {
     let mut hasher = blake3::Hasher::new();
-    if use_mmap {
-        let buf = unsafe { Mmap::map(&file) }?;
-        hasher.update_with_join::<blake3::join::RayonJoin>(&buf);
-    } else {
-        let mut buf = vec![0u8; 2_097_152];
-        loop {
-            let bytes_read = file.read(&mut buf)?;
-            if bytes_read == 0 {
-                break;
+    match file {
+        Input::File(file) if use_mmap => {
+            let buf = unsafe { Mmap::map(&file) }?;
+            hasher.update_with_join::<blake3::join::RayonJoin>(&buf);
+        }
+        _ => {
+            let mut file: Box<dyn Read> = match file {
+                Input::File(file) => Box::new(file),
+                Input::Stream(read) => read,
+            };
+            let mut buf = vec![0u8; 2_097_152];
+            loop {
+                let bytes_read = file.read(&mut buf)?;
+                if bytes_read == 0 {
+                    break;
+                }
+                hasher.update_with_join::<blake3::join::RayonJoin>(&buf[0..bytes_read]);
             }
-            hasher.update_with_join::<blake3::join::RayonJoin>(&buf[0..bytes_read]);
         }
     }
     Ok(hasher.finalize().try_into().unwrap())
@@ -133,6 +140,11 @@ pub(crate) struct Options {
             checksums of large files will still be computed one at a time with multithreading."
     )]
     pub job_count: usize,
+}
+
+pub(crate) enum Input {
+    File(File),            // Files are preferred, as the API is more flexible.
+    Stream(Box<dyn Read>), // If it's not a file, it should still be readable.
 }
 
 pub(crate) struct Checksum(pub [u8; OUT_LEN]);
@@ -214,7 +226,7 @@ fn b3_test_file_large() -> Result<()> {
     let (file, _path, _guard) = make_temp_file(b"hello world");
     assert_eq!(
         "d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24",
-        &format!("{}", Checksum(b3sum_large(file, false)?))
+        &format!("{}", Checksum(b3sum_large(Input::File(file), false)?))
     );
     Ok(())
 }
@@ -224,7 +236,7 @@ fn b3_test_file_large_2() -> Result<()> {
     let (file, _path, _guard) = make_temp_file(&vec![0u8; 20_971_520]);
     assert_eq!(
         "bea89379ccc6ac7c6e1a2924643665501a7a6427877f2c6764f9813f8c9330b4",
-        &format!("{}", Checksum(b3sum_large(file, false)?))
+        &format!("{}", Checksum(b3sum_large(Input::File(file), false)?))
     );
     Ok(())
 }
@@ -234,7 +246,7 @@ fn b3_test_file_mmap() -> Result<()> {
     let (file, _path, _guard) = make_temp_file(b"hello world");
     assert_eq!(
         "d74981efa70a0c880b8d8c1985d075dbcbf679b99a5f9914e5aaf96b831a9e24",
-        &format!("{}", Checksum(b3sum_large(file, true)?))
+        &format!("{}", Checksum(b3sum_large(Input::File(file), true)?))
     );
     Ok(())
 }
@@ -244,7 +256,7 @@ fn b3_test_file_mmap_2() -> Result<()> {
     let (file, _path, _guard) = make_temp_file(&vec![0u8; 20_971_520]);
     assert_eq!(
         "bea89379ccc6ac7c6e1a2924643665501a7a6427877f2c6764f9813f8c9330b4",
-        &format!("{}", Checksum(b3sum_large(file, true)?))
+        &format!("{}", Checksum(b3sum_large(Input::File(file), true)?))
     );
     Ok(())
 }
