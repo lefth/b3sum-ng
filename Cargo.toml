@@ -1,6 +1,6 @@
 [package]
 name = "b3sum-ng"
-version = "0.1.0"
+version = "0.1.2"
 authors = ["Daniel Zwell <devel@zwell.net>"]
 edition = "2018"
 license = "MIT/Apache-2.0"

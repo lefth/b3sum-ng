@@ -6,7 +6,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{convert::TryInto, error::Error, fs::File, io::Read, path::PathBuf, sync::Arc};
+use std::{
+    convert::TryInto,
+    error::Error,
+    fs::{metadata, File},
+    io::Read,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use blake3::OUT_LEN;
 use memmap::Mmap;
@@ -73,22 +80,25 @@ pub fn do_checksum(
         }
     }
 
-    // Be careful with locking: we can't use guards because
-    // the lifetime restrictions are not worth the effort.
-    io_lock.acquire(); // this operation will need at least one I/O resource
-    let mut file = File::open(&path)?;
-    let filesize = file.metadata()?.len();
-    if filesize > 131_072 {
+    // Get file size before locking because we won't know how many I/O resources to lock
+    // until we know how big it is. And locks can't be upgraded without probable deadlock.
+    let filesize = metadata(&path)?.len();
+    if filesize > 128 * (1 << 10) {
         // Wait for all other I/O to be finished, and take all the I/O resources.
-        // Because concurrent reads of large files hurts performance on SSDs/HDDs.
-        io_lock.acquire_many(max_job_count as isize - 1);
+        // Because concurrent reads of large files reduces performance.
+        let io_lock = io_lock.access_many(max_job_count as isize);
+        let file = File::open(&path)?;
         let checksum = b3sum_large(Input::File(file), use_mmap);
-        io_lock.release_many(max_job_count as isize);
+        drop(io_lock);
         print_checksum(&path, checksum);
     } else {
         s.spawn(move |_| {
-            let checksum = b3sum_small(&mut file);
-            io_lock.release();
+            let io_lock = io_lock.access();
+            let file = File::open(&path);
+            let checksum = file
+                .map_err(|err| Box::new(err) as Box<dyn Error>)
+                .and_then(|mut file| b3sum_small(&mut file));
+            drop(io_lock);
             print_checksum(&path, checksum);
         });
     };
@@ -106,13 +116,14 @@ pub(crate) fn b3sum_small(file: &mut dyn Read) -> Result<[u8; OUT_LEN]> {
 /// Compute a multi-threaded checksum of a large file by buffering it or memory mapping it.
 pub(crate) fn b3sum_large(file: Input, use_mmap: bool) -> Result<[u8; OUT_LEN]> {
     let mut hasher = blake3::Hasher::new();
+    // Note: if we use io::Cursor<Mmap> to treat all inputs as Read, it's slower on HDDs
     match file {
         Input::File(file) if use_mmap => {
             // Iterating over chunks is faster than computing the whole buffer,
             // even on SSDs. On spinning discs, mmap is still slower than normal file reads.
             // TODO: the buffer size may need to be tuned based on the number of threads.
             let buf = unsafe { Mmap::map(&file) }?;
-            for slice in buf.chunks(4_194_304) {
+            for slice in buf.chunks(4 * (1 << 20)) {
                 hasher.update_with_join::<blake3::join::RayonJoin>(&slice);
             }
         }
@@ -121,7 +132,7 @@ pub(crate) fn b3sum_large(file: Input, use_mmap: bool) -> Result<[u8; OUT_LEN]> 
                 Input::File(file) => Box::new(file),
                 Input::Stream(read) => read,
             };
-            let mut buf = vec![0u8; 2_097_152];
+            let mut buf = vec![0u8; 2 * (1 << 20)];
             loop {
                 let bytes_read = file.read(&mut buf)?;
                 if bytes_read == 0 {
