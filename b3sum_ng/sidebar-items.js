@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["do_checksum","Compute a checksum using different logic depending on input characteristics. This function handles locking to get the right amount of I/O parallelism."],["print_error","Print an error and the filename that caused it."]]});

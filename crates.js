@@ -1,0 +1,1 @@
+window.ALL_CRATES = ["b3sum_ng"];
